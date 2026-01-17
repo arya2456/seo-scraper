@@ -52,14 +52,26 @@ def get_contact_info(url):
 
 def setup_driver():
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless") # Run in background (no popup window)
+    options.add_argument("--headless") 
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--incognito")
-    # Fake user agent to look like a real browser
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
     
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    # This helps avoid bot detection on servers
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
+
+    # This logic automatically finds Chrome on Streamlit Cloud/Linux or Local
+    service = Service(ChromeDriverManager(driver_version="114.0.5735.90").install())
+    
+    # Try generic driver setup
+    try:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    except:
+        # Fallback for Streamlit Cloud specific path
+        options.binary_location = "/usr/bin/chromium"
+        driver = webdriver.Chrome(service=Service(), options=options)
+
     return driver
 
 # ==========================================
@@ -207,4 +219,5 @@ if run_btn:
     except Exception as e:
         status_area.error(f"An error occurred: {e}")
     finally:
+
         driver.quit()
