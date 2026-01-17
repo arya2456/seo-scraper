@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import re
+import random
 import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -16,13 +17,11 @@ from urllib.parse import urlparse
 # ==========================================
 
 def get_contact_info(url):
-    """
-    Visits a URL and tries to find emails and phone numbers.
-    """
     data = {"Email": "N/A", "Phone": "N/A"}
     try:
-        # aggressive timeout to keep the tool fast
-        response = requests.get(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+        # Random user agent for requests
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
+        response = requests.get(url, timeout=5, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         text = soup.get_text()
 
@@ -33,45 +32,37 @@ def get_contact_info(url):
         if valid_emails:
             data["Email"] = valid_emails[0]
 
-        # Find Phone (Generic pattern)
-        # Check for tel: links first (most accurate)
+        # Find Phone
         tel_links = soup.select("a[href^='tel:']")
         if tel_links:
             data["Phone"] = tel_links[0]['href'].replace("tel:", "")
         else:
-            # Fallback regex for loose numbers
             phone_pattern = r'(\+91[\-\s]?)?[6789]\d{9}'
             phones = re.findall(phone_pattern, text)
             if phones:
-                # This regex returns tuples, need to clean up
                 data["Phone"] = "Found in text" 
-
     except:
-        pass # If site fails, just return N/A
+        pass 
     return data
 
-def setup_driver():
+def setup_driver(headless_mode=True):
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless") 
+    
+    if headless_mode:
+        options.add_argument("--headless") 
+    
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-blink-features=AutomationControlled") # Crucial for Google
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     
-    # This helps avoid bot detection on servers
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
-
-    # This logic automatically finds Chrome on Streamlit Cloud/Linux or Local
-    service = Service(ChromeDriverManager(driver_version="114.0.5735.90").install())
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     
-    # Try generic driver setup
-    try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    except:
-        # Fallback for Streamlit Cloud specific path
-        options.binary_location = "/usr/bin/chromium"
-        driver = webdriver.Chrome(service=Service(), options=options)
-
+    # Hide webdriver property to prevent detection
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    
     return driver
 
 # ==========================================
@@ -80,22 +71,14 @@ def setup_driver():
 
 st.set_page_config(page_title="SEO Lead Scraper", layout="wide")
 
-# Sidebar for Logic Inputs
 st.sidebar.title("🕵️ Scraper Logic")
-st.sidebar.header("1. Target Data")
 keyword = st.sidebar.text_input("Enter Keyword", "ccna course in delhi")
 
-st.sidebar.header("2. Search Logic")
 logic_mode = st.sidebar.selectbox(
-    "Who are we looking for?",
-    (
-        "Low Ranking (Page 4-10) - Ideal for SEO Pitching",
-        "Top Ranking (Page 1-3) - Competitor Analysis",
-        "Deep Dive (Page 1-10) - Maximum Data"
-    )
+    "Target Logic",
+    ("Low Ranking (Page 4-10)", "Top Ranking (Page 1-3)", "Deep Dive (Page 1-10)")
 )
 
-# Logic Translation
 if "Low Ranking" in logic_mode:
     start_page = 4
     max_pages = 3
@@ -106,18 +89,19 @@ else:
     start_page = 1
     max_pages = 10
 
-st.sidebar.header("3. Filters")
-default_ignore = "justdial.com, sulekha.com, quora.com, linkedin.com, facebook.com, shiksha.com, urbanpro.com, wikipedia.org, youtube.com"
-ignore_input = st.sidebar.text_area("Ignore these domains (comma separated)", default_ignore)
+st.sidebar.markdown("---")
+show_browser = st.sidebar.checkbox("👀 Show Browser (Debug Mode)", value=True)
+st.sidebar.caption("Keep this CHECKED. If Google asks for a Captcha, solve it manually in the window!")
+
+default_ignore = "justdial.com, sulekha.com, quora.com, linkedin.com, facebook.com, shiksha.com, urbanpro.com, wikipedia.org, youtube.com, google.com"
+ignore_input = st.sidebar.text_area("Ignore these domains", default_ignore)
 ignore_list = [x.strip() for x in ignore_input.split(',')]
 
 run_btn = st.sidebar.button("🚀 Start Scraper")
 
-# Main Content Area
-st.title("Web Data Scraper with Business Logic")
-st.markdown(f"**Current Logic:** Scraping '{keyword}' starting from **Page {start_page}** (ignoring directories).")
-
+st.title("Web Data Scraper")
 status_area = st.empty()
+log_area = st.empty()
 table_area = st.empty()
 
 # ==========================================
@@ -125,99 +109,108 @@ table_area = st.empty()
 # ==========================================
 
 if run_btn:
-    driver = setup_driver()
+    # Pass False to setup_driver so the browser is VISIBLE
+    driver = setup_driver(headless_mode=not show_browser)
     results = []
     
     try:
-        status_area.info("Initializing Browser...")
+        status_area.info("Browser Launched. Visiting Google...")
         driver.get("https://www.google.com")
         
-        # Search
         search_box = driver.find_element(By.NAME, "q")
         search_box.send_keys(keyword)
         search_box.send_keys(Keys.RETURN)
-        time.sleep(2)
+        time.sleep(3) # Wait for results
 
         # Logic: Jump to specific page
         start_index = (start_page - 1) * 10
         if start_index > 0:
             current_url = driver.current_url + f"&start={start_index}"
             driver.get(current_url)
-            time.sleep(2)
+            time.sleep(3)
 
         pages_scraped = 0
         
         while pages_scraped < max_pages:
             current_page_num = start_page + pages_scraped
-            status_area.warning(f"Scraping Google Page {current_page_num}...")
+            status_area.warning(f"Scraping Page {current_page_num}...")
             
-            # Get Results
+            # --- DEBUGGING: Check for Captcha ---
+            if "sorry" in driver.current_url or "google.com/sorry" in driver.current_url:
+                st.error("⚠️ Google detected a bot! Please solve the Captcha in the browser window manually.")
+                time.sleep(15) # Give user time to solve it
+            
+            # Find Results (Generic Divs)
             search_results = driver.find_elements(By.CSS_SELECTOR, 'div.g')
+            
+            log_area.write(f"Found {len(search_results)} raw results on Page {current_page_num}. Filtering...")
+
+            if len(search_results) == 0:
+                log_area.error("No results found. Google might have changed layout or blocked the IP.")
             
             for res in search_results:
                 try:
-                    link_tag = res.find_element(By.CSS_SELECTOR, 'a')
-                    url = link_tag.get_attribute('href')
-                    title = res.find_element(By.CSS_SELECTOR, 'h3').text
+                    # Robust extraction
+                    try:
+                        link_tag = res.find_element(By.CSS_SELECTOR, 'a')
+                        url = link_tag.get_attribute('href')
+                        title_tag = res.find_element(By.CSS_SELECTOR, 'h3')
+                        title = title_tag.text
+                    except:
+                        continue # Skip if structure is weird
                     
                     if not url or not title: continue
                     
-                    # Domain Filter Logic
+                    # Domain Filter
                     domain = urlparse(url).netloc.replace("www.", "")
+                    
+                    # LOGIC: Check Ignore List
                     if any(ignored in domain for ignored in ignore_list):
-                        continue # Skip directories
+                        # print(f"Ignored: {domain}")
+                        continue 
 
-                    # Data Extraction
-                    # Check if we already have this domain to avoid duplicates
+                    # Avoid duplicates
                     if any(r['Domain'] == domain for r in results):
                         continue
 
-                    # Visit site for contacts
-                    status_area.text(f"Extracting contact info from: {domain}")
+                    # Visit site
+                    log_area.write(f"🔍 Visiting: {domain}")
                     contacts = get_contact_info(url)
 
                     results.append({
-                        "Rank": len(results) + 1 + start_index,
                         "Business Name": title,
                         "Domain": domain,
-                        "Website": url,
                         "Email": contacts['Email'],
                         "Phone": contacts['Phone'],
-                        "Source Page": current_page_num
+                        "Link": url
                     })
                     
-                    # Update Table Live
-                    df_live = pd.DataFrame(results)
-                    table_area.dataframe(df_live)
+                    table_area.dataframe(pd.DataFrame(results))
 
                 except Exception as e:
+                    print(e)
                     continue
             
-            # Next Page Logic
+            # Next Page
             pages_scraped += 1
             try:
                 next_button = driver.find_element(By.ID, "pnnext")
                 next_button.click()
-                time.sleep(3)
+                time.sleep(random.uniform(3, 5)) # Random sleep to act human
             except:
-                status_area.error("No more pages found or Google blocked the request.")
+                log_area.warning("No 'Next' button found. Stopping.")
                 break
 
-        status_area.success(f"Finished! Found {len(results)} potential leads.")
+        status_area.success(f"Finished! Found {len(results)} leads.")
         
-        # Download Button
         if results:
             df_final = pd.DataFrame(results)
             csv = df_final.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Data as CSV",
-                data=csv,
-                file_name=f'leads_{keyword.replace(" ", "_")}.csv',
-                mime='text/csv',
-            )
+            st.download_button("📥 Download CSV", csv, f'leads_{keyword}.csv', 'text/csv')
 
     except Exception as e:
-        status_area.error(f"An error occurred: {e}")
+        st.error(f"Critical Error: {e}")
     finally:
-
-        driver.quit()
+        # Only close if we are confident, otherwise leave open for debug
+        if not show_browser:
+            driver.quit()
