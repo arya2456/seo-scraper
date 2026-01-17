@@ -1,7 +1,5 @@
 streamlit
-selenium
 pandas
 beautifulsoup4
 requests
-webdriver-manager
-duckduckgo-search
+duckduckgo-search>=6.1.0
